@@ -1,76 +1,81 @@
 package server
 
 import (
-	"net/http"
-
+	"context"
 	"fmt"
 	"log"
 	"time"
 
-	"github.com/labstack/echo/v4"
-	"github.com/labstack/echo/v4/middleware"
-
-	"github.com/coder/websocket"
+	"github.com/gofiber/contrib/websocket"
+	"github.com/gofiber/fiber/v2"
+	"github.com/gofiber/fiber/v2/middleware/cors"
+	database "github.com/imide/debashare-go/internal/database/sqlc"
+	"github.com/imide/debashare-go/internal/server/handlers"
 )
 
-func (s *Server) RegisterRoutes() http.Handler {
-	e := echo.New()
-	e.Use(middleware.Logger())
-	e.Use(middleware.Recover())
-
-	e.Use(middleware.CORSWithConfig(middleware.CORSConfig{
-		AllowOrigins:     []string{"https://*", "http://*"},
-		AllowMethods:     []string{"GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"},
-		AllowHeaders:     []string{"Accept", "Authorization", "Content-Type", "X-CSRF-Token"},
-		AllowCredentials: true,
+func (s *FiberServer) RegisterFiberRoutes() {
+	s.App.Use(cors.New(cors.Config{
+		AllowOrigins:     "*",
+		AllowMethods:     "GET,POST,PUT,DELETE,OPTIONS,PATCH",
+		AllowHeaders:     "Accept,Authorization,Content-Type",
+		AllowCredentials: false,
 		MaxAge:           300,
 	}))
 
-	e.GET("/", s.HelloWorldHandler)
+	// Create handlers with database queries
+	queries := database.New(s.db.DB())
+	h := handlers.NewHandler(queries)
 
-	e.GET("/health", s.healthHandler)
+	// Base routes
+	s.App.Get("/", s.HelloWorldHandler)
+	s.App.Get("/health", s.healthHandler)
+	s.App.Get("/websocket", websocket.New(s.websocketHandler))
 
-	e.GET("/websocket", s.websocketHandler)
+	// Room routes
+	s.App.Post("/rooms", h.CreateRoom)
+	s.App.Get("/rooms/:id", h.GetRoom)
 
-	return e
+	// File routes
+	s.App.Post("/rooms/:id/files", h.AddFile)
+	s.App.Get("/rooms/:id/files", h.ListFiles)
+	s.App.Delete("/rooms/:roomId/files/:fileId", h.DeleteFile)
 }
 
-func (s *Server) HelloWorldHandler(c echo.Context) error {
-	resp := map[string]string{
+func (s *FiberServer) HelloWorldHandler(c *fiber.Ctx) error {
+	return c.JSON(fiber.Map{
 		"message": "Hello World",
-	}
-
-	return c.JSON(http.StatusOK, resp)
+	})
 }
 
-func (s *Server) healthHandler(c echo.Context) error {
-	return c.JSON(http.StatusOK, s.db.Health())
+func (s *FiberServer) healthHandler(c *fiber.Ctx) error {
+	return c.JSON(s.db.Health())
 }
 
-func (s *Server) websocketHandler(c echo.Context) error {
-	w := c.Response().Writer
-	r := c.Request()
-	socket, err := websocket.Accept(w, r, nil)
+func (s *FiberServer) websocketHandler(con *websocket.Conn) {
+	ctx, cancel := context.WithCancel(context.Background())
 
-	if err != nil {
-		log.Printf("could not open websocket: %v", err)
-		_, _ = w.Write([]byte("could not open websocket"))
-		w.WriteHeader(http.StatusInternalServerError)
-		return nil
-	}
-
-	defer socket.Close(websocket.StatusGoingAway, "server closing websocket")
-
-	ctx := r.Context()
-	socketCtx := socket.CloseRead(ctx)
+	go func() {
+		for {
+			_, _, err := con.ReadMessage()
+			if err != nil {
+				cancel()
+				log.Println("Receiver Closing", err)
+				break
+			}
+		}
+	}()
 
 	for {
-		payload := fmt.Sprintf("server timestamp: %d", time.Now().UnixNano())
-		err := socket.Write(socketCtx, websocket.MessageText, []byte(payload))
-		if err != nil {
-			break
+		select {
+		case <-ctx.Done():
+			return
+		default:
+			payload := fmt.Sprintf("server timestamp: %d", time.Now().UnixNano())
+			if err := con.WriteMessage(websocket.TextMessage, []byte(payload)); err != nil {
+				log.Printf("could not write to socket: %v", err)
+				return
+			}
+			time.Sleep(time.Second * 2)
 		}
-		time.Sleep(time.Second * 2)
 	}
-	return nil
 }

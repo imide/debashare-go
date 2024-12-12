@@ -1,41 +1,25 @@
 package server
 
 import (
-	bucket "debashare-go/internal/minio"
-	"fmt"
-	"net/http"
-	"os"
-	"strconv"
-	"time"
+	"github.com/gofiber/fiber/v2"
 
-	"debashare-go/internal/database"
-
-	_ "github.com/joho/godotenv/autoload"
+	"github.com/imide/debashare-go/internal/database"
 )
 
-type Server struct {
-	port int
+type FiberServer struct {
+	*fiber.App
 
-	db    database.Service
-	minio bucket.Service
+	db database.Service
 }
 
-func NewServer() *http.Server {
-	port, _ := strconv.Atoi(os.Getenv("PORT"))
-	NewServer := &Server{
-		port: port,
+func New() *FiberServer {
+	server := &FiberServer{
+		App: fiber.New(fiber.Config{
+			ServerHeader: "debashare-go",
+			AppName:      "debashare-go",
+		}),
 
-		db:    database.New(),
-		minio: bucket.New(),
-	}
-
-	// Declare Server config
-	server := &http.Server{
-		Addr:         fmt.Sprintf(":%d", NewServer.port),
-		Handler:      NewServer.RegisterRoutes(),
-		IdleTimeout:  time.Minute,
-		ReadTimeout:  10 * time.Second,
-		WriteTimeout: 30 * time.Second,
+		db: database.New(),
 	}
 
 	return server

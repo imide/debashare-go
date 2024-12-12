@@ -22,6 +22,9 @@ type Service interface {
 	// Close terminates the database connection.
 	// It returns an error if the connection cannot be closed.
 	Close() error
+
+	// DB returns the underlying database connection
+	DB() *sql.DB
 }
 
 type service struct {
@@ -52,6 +55,11 @@ func New() Service {
 		db: db,
 	}
 	return dbInstance
+}
+
+// DB returns the underlying database connection
+func (s *service) DB() *sql.DB {
+	return s.db
 }
 
 // Health checks the health of the database connection by pinging the database.
